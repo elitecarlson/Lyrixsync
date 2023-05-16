@@ -1,0 +1,202 @@
+:root {
+    --bgcolor: #766faf;
+}
+*{
+    padding: 0;
+    margin: 0;
+}
+body{
+    background-color: rgb(0, 0, 0);
+}
+.textarea{
+    width: 80%;
+    height: 80vh;
+    border: none;
+    font-size: 28px;
+    font-family: sans-serif;
+    font-weight: bold;
+    padding-left: 20%;
+    padding-top: 20px;
+    padding-bottom: 20px;
+    line-height: 40px;
+    background-color:  var(--bgcolor);
+    resize: none;
+    outline: none;
+    cursor: url(./text-editor.png), auto;
+}
+.textareahidden{
+    display: none;
+    visibility: hidden;
+}
+.box{
+    width: 80%;
+    height: 80vh;
+    border: none;
+    font-size: 28px;
+    font-family: sans-serif;
+    font-weight: bold;
+    padding-left: 20%;
+    padding-top: 20px;
+    padding-bottom: 20px;
+    line-height: 40px;
+    background-color:  var(--bgcolor);
+    resize: none;
+    outline: none;
+    overflow-y: scroll;
+}
+.box p{
+    cursor: pointer;
+    background-color: none;
+    width: fit-content;
+}
+.box p:hover{
+    color: rgba(255, 255, 255, 0.63);
+}
+.previewbox{
+    width: 80%;
+    height: 80vh;
+    border: none;
+    font-size: 28px;
+    font-family: sans-serif;
+    font-weight: bold;
+    padding-left: 20%;
+    padding-top: 20px;
+    padding-bottom: 20px;
+    line-height: 40px;
+    background-color:  var(--bgcolor);
+    resize: none;
+    outline: none;
+    overflow-y: scroll;
+}
+.focused{
+    color: white;
+}
+.unfocused{
+    color: black;
+}
+.setLyricsbtn{
+    position: absolute;
+    top: 0;
+    right: 0;
+    border: none;
+    background-color: black;
+    color: white;
+    width: 120px;
+    height: 40px;
+    border-radius: 10px;
+    margin-top: 20px;
+    margin-right: 40px;
+    font-weight: bold;
+    cursor: pointer;
+}
+.setLyricsbtnhidden{
+    display: none;
+    visibility: hidden;
+}
+.controls{
+    width: 94%;
+    height: 12vh;
+    background-color: rgba(0, 0, 0, 0);
+    display: flex;
+    justify-content: space-between;
+    padding-left: 3%;
+    padding-right: 3%;
+    align-items: center;
+
+}
+.add{
+    display: block;
+    background-image: url(./plus.png);
+    background-color: white;
+    background-repeat: no-repeat;
+    background-size: cover;
+    cursor: pointer;
+    border-radius: 30px;
+    width: 30px;
+    height: 30px;
+}
+.addHidden{
+    display: none;
+    visibility: hidden;
+}
+/* .progressbar{
+    width: 85%;
+} */
+.time {
+    display: flex;
+    align-items: center;
+    margin-left: 14px;
+    margin-right: 4px;
+}
+.time p {
+    font-family: sans-serif;
+    font-size: 15px;
+    color: white;
+}
+.playHidden{
+    display: none;
+    visibility: hidden;
+}
+.playBtn{
+    display: block;
+    background-image: url(./play\ \(2\).png);
+    background-color: white;
+    background-repeat: no-repeat;
+    background-size: cover;
+    cursor: pointer;
+    border-radius: 30px;
+    width: 30px;
+    height: 30px;
+    border: none;
+}
+.playbutton{
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: white;
+    width: 30px;
+    height: 30px;
+    cursor: pointer;
+    border-radius: 30px;
+}
+.playicon{
+    display: block;
+    width: 20px;
+    height: 20px;
+    background-image: url(./play\ \(2\).png);
+    background-repeat: no-repeat;
+    background-size: cover;
+}
+.pauseicon{
+    display: block;
+    width: 16px;
+    height: 16px;
+    background-image: url(./pause\ \(1\).png);
+    background-repeat: no-repeat;
+    background-size: cover;
+}
+.progressbar{
+    width: 85%;
+    height: 8px;
+    -webkit-appearance: none;
+    background: rgba(255, 255, 255, 0.192);
+    outline: none;
+    border-radius: 20px;
+    overflow: hidden;
+    cursor: pointer;
+}
+.progressbar::-webkit-slider-thumb{
+    -webkit-appearance: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 10px;
+    background: rgb(255, 255, 255);
+    cursor: pointer;
+    box-shadow: -707px 0 0 700px rgb(255, 255, 255);
+}
+input[type="file"]{
+    display: none;
+}
+::placeholder{
+    color: rgba(0, 0, 0, 0.747);
+}

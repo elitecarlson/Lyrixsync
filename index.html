@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="./style.css">
+    <title>Lyrixsync</title>
+</head>
+<body>
+    <div class="textareahidden" id="box"></div>
+    <textarea id="textarea" class="textarea" placeholder="Paste Lyrics here (Ctrl+V)"></textarea>
+    <button onclick="getLyrics()" class="setLyricsbtn" id="lyricsbtn">SET LYRICS</button>
+    
+    <!-- Bottom controls -->
+    <div class="controls">
+        <input type="file" accept="audio/*" id="song" onchange="getAudio()">
+        <label for="song" class="add" id="add"></label>
+        <div class="playHidden" id="playHidden" onclick="play_pause()">
+            <div class="playicon" id="play_pauseicon"></div>
+        </div>
+
+        <audio src="" id="audio"></audio>
+        <input type="range" name="" id="" class="progressbar" value="0">
+        
+        <div class="time">
+            <p class="currenttime">0:00 </p>
+            <p> / </p>
+            <p class="duration"> 0:00</p>
+        </div>
+    </div>
+    <script>
+        const audio = document.getElementById("audio"); 
+        const elapsedtime = document.querySelector('.currenttime');
+        const audio_durationtime = document.querySelector('.duration');
+        const progressbar = document.querySelector('.progressbar');
+
+        function getLyrics(){
+            var textarea = document.getElementById("textarea");
+            var lyricsbtn = document.getElementById("lyricsbtn");
+            var box = document.getElementById("box");
+            textarea.className = "textareahidden";
+            lyricsbtn.className = "setLyricsbtnhidden";
+            box.className = "box"
+            var lyrics = textarea.value;
+            var lyricsArray = lyrics.split(/\r?\n/);
+            for(i=0; i<lyricsArray.length; i++){
+                const txt = document.createElement('p');
+                txt.innerText = lyricsArray[i];
+                txt.id = i;
+                txt.addEventListener("click", lyricClicked);
+                box.appendChild(txt);
+            }
+        }
+
+        function getAudio(){
+            var song = document.getElementById("song").files[0];
+            var add = document.getElementById("add");
+            var play = document.getElementById("playHidden");
+            var audio = document.getElementById("audio");
+            var songURL = URL.createObjectURL(song);
+            add.className = "addHidden";
+            play.className = "playbutton";
+            audio.setAttribute('src', songURL);
+            const title = `Lyrixsync | ${song.name.split(".")[0]}`
+            document.title = title;
+        }
+
+        function play_pause(){
+            var audio = document.getElementById("audio");
+            var play_pauseicon = document.getElementById("play_pauseicon");
+            if (audio.paused) {
+                audio.play();
+                play_pauseicon.className = "pauseicon"
+            }else{
+                audio.pause();
+                play_pauseicon.className = "playicon"
+            }
+        }
+        
+        function audio_duration(){
+            var minutes = Math.floor(audio.duration / 60);
+            var seconds = Math.round(audio.duration % 60);
+            if (seconds < 10) {
+                seconds = "0"+seconds;
+            }
+            var duration = minutes+":"+seconds;
+            audio_durationtime.innerHTML = duration;
+        }
+
+        function audio_timepassed(){
+            var audiotime = audio.currentTime;
+            var elapsed_min = Math.floor(audiotime/60);
+            var elapsed_sec = Math.floor(audiotime%60);
+            if (elapsed_sec < 10) {
+                elapsed_sec = "0"+elapsed_sec;
+            }
+            elapsed_audio_time = elapsed_min+":"+elapsed_sec;
+            elapsedtime.innerText = elapsed_audio_time;
+            if (audio.currentTime == audio.duration) {
+                var play_pauseicon = document.getElementById("play_pauseicon");
+                play_pauseicon.className = "playicon";
+            }
+        }
+
+        function progressbar_move(){
+            progressbar.value = audio.currentTime;
+            progressbar.max = Math.floor(audio.duration);           
+        }
+
+        function progress_seek(){
+            audio.currentTime = progressbar.value;
+            progressbar.max = Math.floor(audio.duration);
+        }
+
+        // function setTheme(){
+        //     const colorPaletesArray = [
+        //         "#4C8073","#0081A1","#587B92","#766FAF","#68759D","#518251","#757575", "#B022FF",
+        //         "#B36200","#BE5656","#CC35AA","#DC2D72","#DD372E","#E42B14","#E42641","#EE0202"
+        //     ];
+        //     const randomnum = Math.floor(Math.random() * colorPaletesArray.length)
+        //     document.documentElement.style.setProperty('--bgcolor', colorPaletesArray[randomnum]);
+        // }
+
+        const SyncedLyrics = [];
+        function lyricClicked(e){
+            if (audio.paused){
+                // Do nothing
+            }else{
+                const sync = {
+                    timestamp : audio.currentTime,
+                    lyric: document.getElementById(e.target.id).innerHTML
+                }
+                SyncedLyrics.push(sync);
+                const lyric = document.getElementById(e.target.id)
+                lyric.className = "focused";
+            }
+        }
+
+        function synclyrics(){
+            if (SyncedLyrics.length == 0) {
+                // Do nothing
+            }else{
+                for(i=0; i<SyncedLyrics.length; i++){
+                    var lyric = document.getElementById(i)
+                    if (audio.currentTime >= SyncedLyrics[i].timestamp) {
+                        lyric.className = "focused"
+                    }else{
+                        lyric.className = "unfocused"
+                    }
+                }
+            }
+        }
+
+        audio.addEventListener('loadedmetadata', audio_duration);
+        audio.addEventListener('timeupdate', audio_timepassed);
+        audio.addEventListener('timeupdate',progressbar_move);
+        audio.addEventListener('timeupdate',synclyrics);
+        progressbar.addEventListener('input', progress_seek);
+        // window.addEventListener('load', setTheme);
+    </script>
+</body>
+</html>
