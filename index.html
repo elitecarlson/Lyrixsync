@@ -8,25 +8,37 @@
     <title>Lyrixsync</title>
 </head>
 <body>
-    <div class="textareahidden" id="box"></div>
+    <div class="textareahidden" id="box">
+        <!-- <div class="lyricContainer">
+            <div class="lyricControl">
+                <button class="plusIcon">+</button>
+                <p>00:33.04</p>
+                <button class="minusIcon">-</button>
+            </div>
+            <p id="0">Hello world</p> -->
+        </div>
+    </div>
     <textarea id="textarea" class="textarea" placeholder="Paste Lyrics here (Ctrl+V)"></textarea>
     <button onclick="getLyrics()" class="setLyricsbtn" id="lyricsbtn">SET LYRICS</button>
     
     <!-- Bottom controls -->
-    <div class="controls">
-        <input type="file" accept="audio/*" id="song" onchange="getAudio()">
-        <label for="song" class="add" id="add"></label>
-        <div class="playHidden" id="playHidden" onclick="play_pause()">
-            <div class="playicon" id="play_pauseicon"></div>
-        </div>
+    <audio src="" id="audio"></audio>
 
-        <audio src="" id="audio"></audio>
-        <input type="range" name="" id="" class="progressbar" value="0">
-        
-        <div class="time">
-            <p class="currenttime">0:00 </p>
-            <p> / </p>
-            <p class="duration"> 0:00</p>
+    <div class="centeredControls">
+        <div class="controls">
+            <input type="file" accept="audio/*" id="song" onchange="getAudio()">
+            <label for="song" class="add" id="add"></label>
+            <div class="playHidden" id="playHidden" onclick="play_pause()">
+                <div class="playicon" id="play_pauseicon"></div>
+            </div>
+    
+            <input type="range" name="" id="" class="progressbar" value="0">
+            
+            <div class="time">
+                <p class="currenttime">0:00 </p>
+                <p> / </p>
+                <p class="duration"> 0:00</p>
+            </div>
         </div>
     </div>
     <script>
@@ -46,11 +58,45 @@
             var lyricsArray = lyrics.split(/\r?\n/);
             for(i=0; i<lyricsArray.length; i++){
                 const txt = document.createElement('p');
+                const lyricContainer = document.createElement("div");
+                lyricContainer.className = "lyricContainer";
                 txt.innerText = lyricsArray[i];
                 txt.id = i;
+                addlyricControl(lyricContainer, i);
+                lyricContainer.appendChild(txt);
                 txt.addEventListener("click", lyricClicked);
-                box.appendChild(txt);
+                box.appendChild(lyricContainer);
             }
+        }
+
+        function addlyricControl(lyricContainer, lyricIndex){
+            const lyricControl = document.createElement('div');
+            const plusIcon = document.createElement("button");
+            const minusIcon = document.createElement("button");
+            const lyricControlTime = document.createElement("p");
+            lyricControlTime.addEventListener('click', ()=>{goToTimeStamp(lyricControlTime.innerHTML)})
+            plusIcon.addEventListener('click', ()=>{addMillisecond(lyricIndex)})
+            lyricControl.className = "lyricControl";
+            lyricControl.id = "control"+lyricIndex;
+            plusIcon.innerHTML = "+";
+            minusIcon.innerHTML = "-";
+            plusIcon.className = "plusIcon";
+            minusIcon.className = "minusIcon";
+            lyricControlTime.innerHTML = "00:00.0";
+            lyricControl.appendChild(plusIcon);
+            lyricControl.appendChild(lyricControlTime);
+            lyricControl.appendChild(minusIcon);
+            lyricContainer.appendChild(lyricControl);
+        }
+
+        function goToTimeStamp(timestamp) {
+            let decodedTimetamp = reverseConvertTimestamp(timestamp);
+            audio.currentTime = decodedTimetamp;
+            // console.log(timestamp)
+        }
+
+        function addMillisecond() {
+            
         }
 
         function getAudio(){
@@ -122,6 +168,29 @@
         //     document.documentElement.style.setProperty('--bgcolor', colorPaletesArray[randomnum]);
         // }
 
+
+        function convertTimestamp(timestamp) {
+            const minutes = Math.floor(timestamp / 60);
+            const seconds = Math.floor(timestamp % 60);
+            const milliseconds = Math.floor((timestamp % 1) * 10);
+
+            const formattedMinutes = String(minutes).padStart(2, '0');
+            const formattedSeconds = String(seconds).padStart(2, '0');
+            const formattedMilliseconds = String(milliseconds);
+
+            return `${formattedMinutes}:${formattedSeconds}.${formattedMilliseconds}`;
+        }
+
+        function reverseConvertTimestamp(formattedTimestamp) {
+            const [minutes, secondsAndMilliseconds] = formattedTimestamp.split(':');
+            const [seconds, milliseconds] = secondsAndMilliseconds.split('.');
+
+            const totalSeconds = parseInt(minutes, 10) * 60 + parseInt(seconds, 10);
+            const totalMilliseconds = totalSeconds * 1000 + parseInt(milliseconds, 10) * 100;
+
+            return (totalMilliseconds / 1000).toFixed(6);
+        }
+
         const SyncedLyrics = [];
         function lyricClicked(e){
             if (audio.paused){
@@ -132,9 +201,13 @@
                     lyric: document.getElementById(e.target.id).innerHTML
                 }
                 SyncedLyrics.push(sync);
-                const lyric = document.getElementById(e.target.id)
+                const lyric = document.getElementById(e.target.id);
+                const lyricControl = document.getElementById("control"+e.target.id);
+                lyricControl.getElementsByTagName('p')[0].innerHTML = convertTimestamp(audio.currentTime)
+                lyricControl.getElementsByTagName('p')[0].className = "solidBlack"
                 lyric.className = "focused";
-            }
+            }  
+            console.log(SyncedLyrics)
         }
 
         function synclyrics(){
