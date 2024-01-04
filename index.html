@@ -40,6 +40,7 @@
                 <p class="duration"> 0:00</p>
             </div>
         </div>
+        <div class="Download" title="Download as JSON" id="download"></div>
     </div>
     <script>
         const audio = document.getElementById("audio"); 
@@ -47,10 +48,13 @@
         const audio_durationtime = document.querySelector('.duration');
         const progressbar = document.querySelector('.progressbar');
 
+        const SyncedLyrics = [];
         function getLyrics(){
             var textarea = document.getElementById("textarea");
             var lyricsbtn = document.getElementById("lyricsbtn");
             var box = document.getElementById("box");
+            var downloadbtn = document.getElementById("download");
+            downloadbtn.style.display = "block";
             textarea.className = "textareahidden";
             lyricsbtn.className = "setLyricsbtnhidden";
             box.className = "box"
@@ -66,6 +70,11 @@
                 lyricContainer.appendChild(txt);
                 txt.addEventListener("click", lyricClicked);
                 box.appendChild(lyricContainer);
+                const sync = {
+                    timestamp : null,
+                    lyric: lyricsArray[i]
+                }
+                SyncedLyrics.push(sync)
             }
         }
 
@@ -75,7 +84,8 @@
             const minusIcon = document.createElement("button");
             const lyricControlTime = document.createElement("p");
             lyricControlTime.addEventListener('click', ()=>{goToTimeStamp(lyricControlTime.innerHTML)})
-            plusIcon.addEventListener('click', ()=>{addMillisecond(lyricIndex)})
+            plusIcon.addEventListener('click', ()=>{addMillisecond(lyricIndex)});
+            minusIcon.addEventListener('click', ()=>{minusMillisecond(lyricIndex)});
             lyricControl.className = "lyricControl";
             lyricControl.id = "control"+lyricIndex;
             plusIcon.innerHTML = "+";
@@ -92,11 +102,22 @@
         function goToTimeStamp(timestamp) {
             let decodedTimetamp = reverseConvertTimestamp(timestamp);
             audio.currentTime = decodedTimetamp;
-            // console.log(timestamp)
         }
 
-        function addMillisecond() {
-            
+        function addMillisecond(index) {
+            if (SyncedLyrics[index].timestamp) {
+                let newtimestamp = SyncedLyrics[index].timestamp += 0.1;
+                const lyricControl = document.getElementById("control"+index);
+                lyricControl.getElementsByTagName('p')[0].innerHTML = convertTimestamp(newtimestamp)
+            }
+        }
+
+        function minusMillisecond(index) {
+            if (SyncedLyrics[index].timestamp) {
+                let newtimestamp = SyncedLyrics[index].timestamp -= 0.1;
+                const lyricControl = document.getElementById("control"+index);
+                lyricControl.getElementsByTagName('p')[0].innerHTML = convertTimestamp(newtimestamp)
+            }
         }
 
         function getAudio(){
@@ -159,16 +180,6 @@
             progressbar.max = Math.floor(audio.duration);
         }
 
-        // function setTheme(){
-        //     const colorPaletesArray = [
-        //         "#4C8073","#0081A1","#587B92","#766FAF","#68759D","#518251","#757575", "#B022FF",
-        //         "#B36200","#BE5656","#CC35AA","#DC2D72","#DD372E","#E42B14","#E42641","#EE0202"
-        //     ];
-        //     const randomnum = Math.floor(Math.random() * colorPaletesArray.length)
-        //     document.documentElement.style.setProperty('--bgcolor', colorPaletesArray[randomnum]);
-        // }
-
-
         function convertTimestamp(timestamp) {
             const minutes = Math.floor(timestamp / 60);
             const seconds = Math.floor(timestamp % 60);
@@ -191,23 +202,17 @@
             return (totalMilliseconds / 1000).toFixed(6);
         }
 
-        const SyncedLyrics = [];
         function lyricClicked(e){
             if (audio.paused){
                 // Do nothing
             }else{
-                const sync = {
-                    timestamp : audio.currentTime,
-                    lyric: document.getElementById(e.target.id).innerHTML
-                }
-                SyncedLyrics.push(sync);
+                SyncedLyrics[e.target.id].timestamp = audio.currentTime;
                 const lyric = document.getElementById(e.target.id);
                 const lyricControl = document.getElementById("control"+e.target.id);
                 lyricControl.getElementsByTagName('p')[0].innerHTML = convertTimestamp(audio.currentTime)
                 lyricControl.getElementsByTagName('p')[0].className = "solidBlack"
                 lyric.className = "focused";
-            }  
-            console.log(SyncedLyrics)
+            }
         }
 
         function synclyrics(){
@@ -216,10 +221,12 @@
             }else{
                 for(i=0; i<SyncedLyrics.length; i++){
                     var lyric = document.getElementById(i)
-                    if (audio.currentTime >= SyncedLyrics[i].timestamp) {
-                        lyric.className = "focused"
-                    }else{
-                        lyric.className = "unfocused"
+                    if (SyncedLyrics[i].timestamp != null) {
+                        if (audio.currentTime >= SyncedLyrics[i].timestamp) {
+                            lyric.className = "focused"
+                        }else{
+                            lyric.className = "unfocused"
+                        }
                     }
                 }
             }
@@ -230,7 +237,6 @@
         audio.addEventListener('timeupdate',progressbar_move);
         audio.addEventListener('timeupdate',synclyrics);
         progressbar.addEventListener('input', progress_seek);
-        // window.addEventListener('load', setTheme);
     </script>
 </body>
 </html>

@@ -231,6 +231,7 @@ input[type="file"]{
     position: absolute;
     display: flex;
     justify-content: center;
+    align-items: center;
     bottom: 0px;
     width: 100%;
 }
@@ -270,4 +271,15 @@ input[type="file"]{
 }
 .solidBlack{
     color: black;
+}
+.Download{
+    display: none;
+    position: absolute;
+    right: 10px;
+    width: 40px;
+    height: 40px;
+    margin-bottom: 15px;
+    cursor: pointer;
+    background-size: cover;
+    background-image: url("./file-download.png");
 }
