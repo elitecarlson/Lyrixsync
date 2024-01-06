@@ -40,7 +40,7 @@
                 <p class="duration"> 0:00</p>
             </div>
         </div>
-        <div class="Download" title="Download as JSON" id="download"></div>
+        <div class="Download" title="Download as JSON" id="download" onclick="download()"></div>
     </div>
     <script>
         const audio = document.getElementById("audio"); 
@@ -53,8 +53,6 @@
             var textarea = document.getElementById("textarea");
             var lyricsbtn = document.getElementById("lyricsbtn");
             var box = document.getElementById("box");
-            var downloadbtn = document.getElementById("download");
-            downloadbtn.style.display = "block";
             textarea.className = "textareahidden";
             lyricsbtn.className = "setLyricsbtnhidden";
             box.className = "box"
@@ -212,6 +210,7 @@
                 lyricControl.getElementsByTagName('p')[0].innerHTML = convertTimestamp(audio.currentTime)
                 lyricControl.getElementsByTagName('p')[0].className = "solidBlack"
                 lyric.className = "focused";
+                checkIfAllLyricsAreSynced();
             }
         }
 
@@ -230,6 +229,29 @@
                     }
                 }
             }
+        }
+
+        function download(){
+            const element = document.createElement('a');
+            element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(JSON.stringify(SyncedLyrics, null, 2)));
+            element.setAttribute('download', document.title+'.json');
+
+            element.style.display = 'none';
+            document.body.appendChild(element);
+
+            element.click();
+
+            document.body.removeChild(element);
+        }
+
+        function checkIfAllLyricsAreSynced(){
+            for (let obj of SyncedLyrics) {
+                if (obj.timestamp === null) {
+                    return false;
+                }
+            }
+            var downloadbtn = document.getElementById("download");
+            downloadbtn.style.display = "block";
         }
 
         audio.addEventListener('loadedmetadata', audio_duration);
