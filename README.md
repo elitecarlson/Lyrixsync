@@ -1,4 +1,3 @@
-```markdown
 # Lyrixsync
 
 ![Lyrixsync](v2screenshot.png)
