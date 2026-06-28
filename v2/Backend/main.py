@@ -10,9 +10,6 @@ import shutil
 import logging
 import subprocess
 from pathlib import Path
-from dotenv import load_dotenv
-
-load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,35 +27,33 @@ SEPARATED_DIR = Path("separated")
 SEPARATED_DIR.mkdir(exist_ok=True)
 app.mount("/files", StaticFiles(directory=str(SEPARATED_DIR)), name="files")
 
+LYRICS_DIR = Path("lyrics")
+LYRICS_DIR.mkdir(exist_ok=True)
+
 DEMUCS_MODEL = "htdemucs"
 
-
-# ---------------------------------------------------------------------------
-# Cache key from original filename
-# ---------------------------------------------------------------------------
 
 def stem_cache_key(filename: str) -> str:
     name = Path(filename).stem
     return re.sub(r"[^\w]", "_", name.lower()).strip("_")
 
 
-# ---------------------------------------------------------------------------
-# Demucs via subprocess — streams progress, caches stems
-# ---------------------------------------------------------------------------
+def lyrics_cache_path(cache_key: str) -> Path:
+    return LYRICS_DIR / f"{cache_key}.json"
 
-def run_demucs_streaming(input_path: str, output_dir: Path, cache_key: str):
+
+def run_demucs(input_path: str, output_dir: Path, cache_key: str) -> dict:
     stem_dir = output_dir / DEMUCS_MODEL / cache_key
     vocals_path = stem_dir / "vocals.mp3"
     instruments_path = stem_dir / "instruments.mp3"
 
     if vocals_path.exists() and instruments_path.exists():
         logger.info(f"[demucs] Cache hit for '{cache_key}' — skipping separation")
-        yield ("done_demucs", {
+        return {
             "vocals": str(vocals_path),
             "instruments": str(instruments_path),
             "track_name": cache_key,
-        })
-        return
+        }
 
     logger.info(f"[demucs] No cache for '{cache_key}' — running separation")
 
@@ -82,16 +77,10 @@ def run_demucs_streaming(input_path: str, output_dir: Path, cache_key: str):
         bufsize=1,
     )
 
-    last_pct = 0
     for line in proc.stdout:
         line = line.rstrip()
-        logger.info(f"[demucs] {line}")
-        pct_match = re.search(r"(\d+)%", line)
-        if pct_match:
-            pct = int(pct_match.group(1))
-            if pct != last_pct:
-                last_pct = pct
-                yield ("progress", pct)
+        if line:
+            logger.info(f"[demucs] {line}")
 
     proc.wait()
     logger.info(f"Demucs exit code: {proc.returncode}")
@@ -114,16 +103,12 @@ def run_demucs_streaming(input_path: str, output_dir: Path, cache_key: str):
     logger.info(f"Vocals: {vocals_path} (exists: {vocals_path.exists()})")
     logger.info(f"Instruments: {instruments_path} (exists: {instruments_path.exists()})")
 
-    yield ("done_demucs", {
+    return {
         "vocals": str(vocals_path),
         "instruments": str(instruments_path),
         "track_name": cache_key,
-    })
+    }
 
-
-# ---------------------------------------------------------------------------
-# stable-ts — forced alignment against exact lyrics
-# ---------------------------------------------------------------------------
 
 def forced_align(audio_path: str, lyrics_lines: list[str]) -> list[dict]:
     import stable_whisper
@@ -156,10 +141,6 @@ def forced_align(audio_path: str, lyrics_lines: list[str]) -> list[dict]:
 
     return word_segments
 
-
-# ---------------------------------------------------------------------------
-# Stitch word segments back into lyric lines
-# ---------------------------------------------------------------------------
 
 def stitch_lines(lyrics_lines: list[str], word_segments: list[dict]) -> list[dict]:
     synced_lines = []
@@ -205,24 +186,26 @@ def stitch_lines(lyrics_lines: list[str], word_segments: list[dict]) -> list[dic
     return synced_lines
 
 
-# ---------------------------------------------------------------------------
-# SSE helper
-# ---------------------------------------------------------------------------
-
 def sse_event(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
+
 
 @app.post("/process")
 async def process(
     file: UploadFile = File(...),
     lyrics: str = Form(...),
 ):
+    import asyncio
+
     logger.info(f"[/process] Received: {file.filename}")
     lyrics_lines = [l for l in lyrics.split("\n") if l.strip()]
     logger.info(f"[/process] Lyrics lines: {len(lyrics_lines)}")
 
     cache_key = stem_cache_key(file.filename)
     logger.info(f"[/process] Cache key: {cache_key}")
+
+    lyrics_path = lyrics_cache_path(cache_key)
+    has_lyrics_cache = lyrics_path.exists()
 
     suffix = Path(file.filename).suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -233,32 +216,45 @@ async def process(
 
     async def generate():
         try:
-            vocals_path = None
-            base = None
+            loop = asyncio.get_event_loop()
 
-            # Phase 1: Demucs stem separation (or instant cache hit)
-            for event_type, payload in run_demucs_streaming(tmp_path, SEPARATED_DIR, cache_key):
-                if event_type == "progress":
-                    yield sse_event({"phase": "separating", "progress": payload})
-                elif event_type == "done_demucs":
-                    vocals_path = payload["vocals"]
-                    track_name = payload["track_name"]
-                    base = f"/files/{DEMUCS_MODEL}/{track_name}"
-                    logger.info(f"[/process] Stems ready. Vocals: {vocals_path}")
+            # Phase 1: Demucs (runs in thread — logs progress, doesn't block SSE)
+            yield sse_event({"phase": "separating"})
 
-            # Emit stems so frontend can unlock stem selector immediately
+            stems = await loop.run_in_executor(
+                None,
+                lambda: run_demucs(tmp_path, SEPARATED_DIR, cache_key)
+            )
+
+            vocals_path = stems["vocals"]
+            track_name = stems["track_name"]
+            base = f"/files/{DEMUCS_MODEL}/{track_name}"
+            logger.info(f"[/process] Stems ready. Vocals: {vocals_path}")
+
+            # Stems done — tell frontend to transition to "Syncing..."
             yield sse_event({
                 "phase": "aligning",
                 "vocals_url": f"{base}/vocals.mp3",
                 "no_vocals_url": f"{base}/instruments.mp3",
             })
 
-            # Phase 2: stable-ts forced alignment on vocal stem
-            logger.info(f"[/process] Starting stable-ts on: {vocals_path}")
-            word_segments = forced_align(vocals_path, lyrics_lines)
+            # Phase 2: alignment (runs in thread — doesn't block SSE)
+            if has_lyrics_cache:
+                logger.info(f"[/process] Lyrics cache hit for '{cache_key}' — skipping alignment")
+                with open(lyrics_path, "r") as f:
+                    synced_lines = json.load(f)
+            else:
+                logger.info(f"[/process] Starting stable-ts on: {vocals_path}")
 
-            # Phase 3: stitch words back into lines
-            synced_lines = stitch_lines(lyrics_lines, word_segments)
+                def align_and_stitch():
+                    word_segments = forced_align(vocals_path, lyrics_lines)
+                    return stitch_lines(lyrics_lines, word_segments)
+
+                synced_lines = await loop.run_in_executor(None, align_and_stitch)
+
+                with open(lyrics_path, "w") as f:
+                    json.dump(synced_lines, f)
+                logger.info(f"[/process] Lyrics cache saved: {lyrics_path}")
 
             logger.info(f"[/process] Complete. {len(synced_lines)} lines synced.")
             yield sse_event({
@@ -278,7 +274,15 @@ async def process(
             except Exception:
                 pass
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 if __name__ == "__main__":

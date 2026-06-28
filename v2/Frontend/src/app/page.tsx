@@ -168,11 +168,6 @@ function letterGlowPulse(w: SyncedWord, t: number, li: number, lc: number, nextW
 // ---------------------------------------------------------------------------
 
 const GLOBAL_CSS = `
-@keyframes lx-bounce {
-  0%, 100% { transform: translateY(0px); opacity: 0.4; }
-  40% { transform: translateY(-5px); opacity: 1; }
-  60% { transform: translateY(-5px); opacity: 1; }
-}
 @keyframes lxpulse {
   0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
   40% { opacity: 0.6; transform: scale(1); }
@@ -180,6 +175,10 @@ const GLOBAL_CSS = `
 @keyframes lx-fade-in {
   from { opacity: 0; transform: translateY(6px) scale(0.97); }
   to   { opacity: 1; transform: translateY(0px) scale(1); }
+}
+@keyframes lx-shimmer {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 1; }
 }
 `;
 
@@ -194,26 +193,26 @@ const LOOP_PAUSE = 0.3;
 function WavyText({ text, color = "rgba(255,255,255,0.5)" }: { text: string; color?: string }) {
   const chars = text.split("");
   const nonSpaceCount = chars.filter((c) => c !== " ").length;
-  const cycleDuration = nonSpaceCount * (LETTER_DUR + LETTER_GAP) + LOOP_PAUSE;
+  const cycleDuration = nonSpaceCount * 0.06 + 0.6;
 
   let letterIndex = 0;
   return (
     <>
       <style>{GLOBAL_CSS}</style>
-      <span className="inline-flex items-end gap-0 font-mono tracking-[0.08em] text-[13px]" style={{ color }}>
+      <span className="inline-flex items-center gap-0 font-mono tracking-[0.08em] text-[13px]" style={{ color }}>
         {chars.map((ch, i) => {
           if (ch === " ") {
             return <span key={i} style={{ display: "inline-block", width: "0.35em" }} />;
           }
-          const myDelay = letterIndex * (LETTER_DUR + LETTER_GAP);
+          const myDelay = letterIndex * 0.06;
           letterIndex++;
           return (
             <span
               key={i}
               style={{
                 display: "inline-block",
-                animation: `lx-bounce ${cycleDuration}s ease-in-out ${myDelay}s infinite`,
-                opacity: 0.4,
+                animation: `lx-shimmer ${cycleDuration}s ease-in-out ${myDelay}s infinite`,
+                opacity: 0.25,
               }}
             >
               {ch}
@@ -312,7 +311,7 @@ function StemSelector({ stemMode, onSelect }: { stemMode: StemMode; onSelect: (m
 
       {open && (
         <div
-          className="absolute top-full left-0 mt-[8px] rounded-[10px] overflow-hidden z-50"
+          className="absolute bottom-full left-1/2 -translate-x-1/2 mb-[8px] rounded-[10px] overflow-hidden z-50"
           style={{
             background: "rgba(255,255,255,0.97)",
             border: "1px solid rgba(0,0,0,0.07)",
@@ -503,7 +502,6 @@ export default function HomePage() {
 
   // Local sync
   const [localSyncPhase, setLocalSyncPhase] = useState<LocalSyncPhase>("idle");
-  const [separateProgress, setSeparateProgress] = useState(0);
 
   // Translation
   const [selectedLanguage, setSelectedLanguage] = useState<TranslateLanguage | "">("");
@@ -515,8 +513,8 @@ export default function HomePage() {
 
   const syncLabel: string | null =
     localSyncPhase === "starting" ? "Starting..." :
-    localSyncPhase === "separating" ? `Listening... ${separateProgress}%` :
-    localSyncPhase === "transcribing" ? "Syncing lyrics..." :
+    localSyncPhase === "separating" ? "Listening..." :
+    localSyncPhase === "transcribing" ? "Syncing..." :
     null;
 
   // ---------------------------------------------------------------------------
@@ -542,7 +540,6 @@ export default function HomePage() {
     setVocalsURL(null);
     setNoVocalsURL(null);
     setLocalSyncPhase("idle");
-    setSeparateProgress(0);
     setSelectedLanguage("");
     setTranslatedLines(null);
     setTranslating(false);
@@ -555,7 +552,7 @@ export default function HomePage() {
   // Seek icon animation
   // ---------------------------------------------------------------------------
 
-  const animateSeekIcon = (ref: React.RefObject<HTMLSpanElement>, deg: number) => {
+  const animateSeekIcon = (ref: React.RefObject<HTMLSpanElement | null>, deg: number) => {
     const el = ref.current;
     if (!el) return;
     el.style.transition = "transform 0.12s ease-out";
@@ -632,7 +629,7 @@ export default function HomePage() {
     a.paused ? void a.play() : a.pause();
   }, [audioFile]);
 
-  const seek = useCallback((delta: number, deg?: number, ref?: React.RefObject<HTMLSpanElement>) => {
+  const seek = useCallback((delta: number, deg?: number, ref?: React.RefObject<HTMLSpanElement | null>) => {
     const a = audioRef.current;
     if (!a || !audioFile) return;
     a.currentTime = Math.max(0, Math.min(a.duration || 0, a.currentTime + delta));
@@ -691,7 +688,6 @@ export default function HomePage() {
 
     // Optimistically set to separating so WavyText shows "Listening..." immediately
     setLocalSyncPhase("separating");
-    setSeparateProgress(0);
     setErrorMsg(null);
 
     const formData = new FormData();
@@ -728,9 +724,8 @@ export default function HomePage() {
             message?: string;
           };
 
-          if (event.phase === "separating" && event.progress !== undefined) {
+          if (event.phase === "separating") {
             setLocalSyncPhase("separating");
-            setSeparateProgress(event.progress);
           } else if (event.phase === "aligning") {
             // Stems are ready — unlock stem selector
             setLocalSyncPhase("transcribing");
@@ -797,7 +792,6 @@ export default function HomePage() {
     setVocalsURL(null);
     setNoVocalsURL(null);
     setLocalSyncPhase("idle");
-    setSeparateProgress(0);
 
     setMetaFetching(true);
     try {
@@ -1041,7 +1035,7 @@ export default function HomePage() {
           <div className="flex items-center justify-center gap-6">
             <button onClick={() => seek(-5, -30, backIconRef)} className="bg-none border-none cursor-pointer p-1 flex items-center justify-center">
               <span ref={backIconRef} className="inline-flex">
-                <RotateCcw size={18} strokeWidth={1.5} color={audioFile ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.12)"} />
+                <RotateCcw size={18} strokeWidth={1.5} color={audioFile ? "rgba(255,255,255)" : "rgba(255,255,255,0.12)"} />
               </span>
             </button>
 
@@ -1071,7 +1065,7 @@ export default function HomePage() {
 
             <button onClick={() => seek(5, 30, fwdIconRef)} className="bg-none border-none cursor-pointer p-1 flex items-center justify-center">
               <span ref={fwdIconRef} className="inline-flex">
-                <RotateCw size={18} strokeWidth={1.5} color={audioFile ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.12)"} />
+                <RotateCw size={18} strokeWidth={1.5} color={audioFile ? "rgba(255,255,255)" : "rgba(255,255,255,0.12)"} />
               </span>
             </button>
           </div>
@@ -1115,24 +1109,25 @@ export default function HomePage() {
                 </a>
 
                 {/* Right: sync lyrics */}
-                <button
-                  onClick={() => void handleProcess()}
-                  disabled={!rawLyrics.trim() || !audioFile || isLocalSyncing || metaFetching}
-                  className="bg-none border-none p-0 transition-colors duration-200"
-                  style={{ cursor: rawLyrics.trim() && audioFile && !isLocalSyncing && !metaFetching ? "pointer" : "default" }}
-                >
-                  {syncLabel ? (
-                    <WavyText text={syncLabel} />
-                  ) : (
+                {metaFetching ? (
+                  <WavyText text="Searching for lyrics..." />
+                ) : syncLabel ? (
+                  <WavyText text={syncLabel} />
+                ) : (
+                  <button
+                    onClick={() => void handleProcess()}
+                    disabled={!rawLyrics.trim() || !audioFile || isLocalSyncing}
+                    className="bg-transparent border-none p-0"
+                    style={{ cursor: rawLyrics.trim() && audioFile && !isLocalSyncing ? "pointer" : "default" }}
+                  >
                     <span
                       className="text-[13px] font-mono tracking-[0.08em]"
                       style={{ color: rawLyrics.trim() && audioFile ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.15)" }}
                     >
-                      {localSyncPhase === "done" ? "re-sync" : localSyncPhase === "error" ? "retry" : "sync lyrics"}
-                      {rawLyrics.trim() && audioFile && localSyncPhase !== "done" && " →"}
+                      {localSyncPhase === "done" ? "re-sync" : localSyncPhase === "error" ? "retry" : "sync"}
                     </span>
-                  )}
-                </button>
+                  </button>
+                )}
               </div>
             </div>
           ) : (

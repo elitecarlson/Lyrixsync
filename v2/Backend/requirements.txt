@@ -3,9 +3,6 @@ uvicorn
 python-multipart
 torch==2.8.0
 torchaudio==2.8.0
-whisperx
+stable-ts
 demucs
 av
-soundfile
-httpx
-python-dotenv
