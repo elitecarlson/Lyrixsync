@@ -7,8 +7,8 @@ import { RotateCcw, RotateCw } from "lucide-react";
 // Types
 // ---------------------------------------------------------------------------
 
-type Phase = "idle" | "uploading" | "syncing" | "annotating" | "done" | "error";
-
+type LocalSyncPhase = "idle" | "starting" | "separating" | "transcribing" | "done" | "error";
+type StemMode = "original" | "vocals" | "instrumental";
 type TranslateLanguage = "french" | "english" | "spanish" | "german" | "dutch" | "polish";
 
 const LANGUAGE_LABELS: Record<TranslateLanguage, string> = {
@@ -20,9 +20,16 @@ const LANGUAGE_LABELS: Record<TranslateLanguage, string> = {
   polish: "Polish",
 };
 
+const STEM_LABELS: Record<StemMode, string> = {
+  original: "Original",
+  vocals: "Vocals",
+  instrumental: "Instrumental",
+};
+
 export interface SyncedWord {
   word: string;
   start: number | null;
+  end: number | null;
 }
 
 export interface SyncedLine {
@@ -79,77 +86,8 @@ async function fetchLrclibLyrics(title: string, artist: string): Promise<string 
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Translation — Gemini text only
 // ---------------------------------------------------------------------------
-
-function parseLyrics(raw: string): SyncedLine[] {
-  return raw.split("\n").map((l) => l.trim()).filter(Boolean).map((line) => ({
-    timestamp: null, line, ghost: /^\(.*\)$/.test(line), words: null, punches: [],
-  }));
-}
-
-function formatTime(s: number) {
-  const m = Math.floor(s / 60);
-  const ss = Math.floor(s % 60);
-  return `${m}:${String(ss).padStart(2, "0")}`;
-}
-
-async function fileToBase64(file: File): Promise<string> {
-  return new Promise((res, rej) => {
-    const r = new FileReader();
-    r.onload = () => res((r.result as string).split(",")[1]!);
-    r.onerror = rej;
-    r.readAsDataURL(file);
-  });
-}
-
-function getActiveIndex(lines: SyncedLine[], time: number) {
-  let active = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i]!.timestamp !== null && lines[i]!.timestamp! <= time) active = i;
-  }
-  return active;
-}
-
-function letterOpacity(w: SyncedWord, t: number, li: number, lc: number, nextWordStart: number | null): number {
-  if (w.start === null) return 0;
-  const sweepEnd = nextWordStart ?? w.start + 0.35;
-  const fullDur = Math.max(sweepEnd - w.start, 0.05);
-  const letterStart = w.start + (li / Math.max(lc, 1)) * fullDur;
-  const letterDur = fullDur / Math.max(lc, 1);
-  const progress = (t - letterStart) / letterDur;
-  return Math.max(0, Math.min(1, progress));
-}
-
-function letterGlowPulse(w: SyncedWord, t: number, li: number, lc: number, nextWordStart: number | null): number {
-  if (w.start === null) return 0;
-  const sweepEnd = nextWordStart ?? w.start + 0.35;
-  const fullDur = Math.max(sweepEnd - w.start, 0.05);
-  const letterStart = w.start + (li / Math.max(lc, 1)) * fullDur;
-  const letterDur = fullDur / Math.max(lc, 1);
-  const progress = (t - letterStart) / letterDur;
-  const x = progress - 1;
-  return Math.exp(-(x * x) / (2 * 0.55 * 0.55));
-}
-
-async function gemini(audiob64: string, mime: string, prompt: string) {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.NEXT_PUBLIC_GEMINI_API_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ inline_data: { mime_type: mime, data: audiob64 } }, { text: prompt }] }],
-        generationConfig: { temperature: 0.15, maxOutputTokens: 65536 },
-      }),
-    }
-  );
-  if (!res.ok) throw new Error(`Gemini ${res.status}`);
-  const data = await res.json();
-  if (data?.candidates?.[0]?.finishReason === "MAX_TOKENS") throw new Error("Response too long — try a shorter song.");
-  const text: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  return JSON.parse(text.replace(/```json|```/gi, "").trim());
-}
 
 async function geminiText(prompt: string) {
   const res = await fetch(
@@ -169,106 +107,6 @@ async function geminiText(prompt: string) {
   return JSON.parse(text.replace(/```json|```/gi, "").trim());
 }
 
-async function syncLines(audiob64: string, mime: string, lines: SyncedLine[]): Promise<SyncedLine[]> {
-  const payload = lines.map((l, i) => ({ lineIndex: i, line: l.line, ghost: l.ghost }));
-
-  console.log("🎵 [SYNC] Sending lines to Gemini for timestamp sync:");
-  console.log(`   Total lines: ${payload.length}`);
-  console.table(payload.map(l => ({ lineIndex: l.lineIndex, ghost: l.ghost, line: l.line })));
-
-  const result = await gemini(audiob64, mime, `You are a lyric sync assistant. Listen to the audio and find exactly when each vocal line begins.\n\nReturn a timestamp (seconds, 2 decimal places) for every line including ghost lines. Timestamps must be ascending.\n\nRespond ONLY with raw JSON, no markdown:\n[{ "lineIndex": 0, "timestamp": 11.44 }]\n\nLines:\n${JSON.stringify(payload, null, 2)}`) as Array<{ lineIndex: number; timestamp: number }>;
-
-  console.log("✅ [SYNC] Raw result from Gemini (synced timestamps):");
-  console.log(JSON.stringify(result, null, 2));
-  console.log(`   Lines returned: ${result.length} / ${lines.length}`);
-
-  const synced = lines.map((l, i) => {
-    const match = result.find((r) => r.lineIndex === i);
-    return match ? { ...l, timestamp: match.timestamp } : l;
-  });
-
-  const missing = synced.filter(l => l.timestamp === null);
-  if (missing.length > 0) {
-    console.warn(`⚠️ [SYNC] ${missing.length} lines have no timestamp:`, missing.map(l => l.line));
-  }
-
-  console.log("📋 [SYNC] Final synced lines:");
-  console.table(synced.map((l, i) => ({ index: i, timestamp: l.timestamp, ghost: l.ghost, line: l.line })));
-
-  return synced;
-}
-
-async function annotateWords(audiob64: string, mime: string, lines: SyncedLine[]): Promise<SyncedLine[]> {
-  // Only send non-ghost lines. We do NOT echo words back — Gemini returns only
-  // an array of start times per line (lean output), and we zip them against the
-  // words we already have. This roughly halves the output token count vs the
-  // previous approach, preventing silent mid-array truncation.
-  const payload = lines
-    .map((l, i) => ({
-      lineIndex: i,
-      timestamp: l.timestamp,
-      wordCount: l.line.split(/\s+/).filter(Boolean).length,
-      line: l.line,
-    }))
-    .filter((_, i) => !lines[i]!.ghost);
-
-  console.log("🔤 [ANNOTATE] Sending lean payload to Gemini (starts-only, no word echo):");
-  console.log(`   Non-ghost lines: ${payload.length}`);
-  console.table(payload.map(l => ({ lineIndex: l.lineIndex, timestamp: l.timestamp, wordCount: l.wordCount, line: l.line })));
-
-  // Gemini returns ONLY the start times as a flat array per line — no word strings.
-  // e.g. [{ "lineIndex": 0, "starts": [3.3, 3.55, 3.7, 3.8, 4.25] }]
-  const result = await gemini(
-    audiob64,
-    mime,
-    `You are a lyric word timing assistant. Listen to the audio and find exactly when each word begins.\n\nFor each line I give you, return ONLY an array of start times (seconds, 2 decimal places) — one number per word, in order. Do NOT repeat the words back.\n\nRules:\n- One start time per word, in the same order as the words in the line\n- Timestamps within a line must be ascending\n- The number of start times must exactly match the wordCount for that line\n- Ghost lines are excluded — they are not in this list\n\nRespond ONLY with raw JSON, no markdown:\n[{ "lineIndex": 0, "starts": [3.3, 3.55, 3.7] }]\n\nLines:\n${JSON.stringify(payload, null, 2)}`
-  ) as Array<{ lineIndex: number; starts: number[] }>;
-
-  console.log("✅ [ANNOTATE] Raw result from Gemini (starts-only):");
-  console.log(JSON.stringify(result, null, 2));
-  console.log(`   Lines with data returned: ${result.length} / ${payload.length}`);
-
-  // Check for missing lines
-  const returnedIndexes = new Set(result.map(r => r.lineIndex));
-  const missingAnnotations = payload.filter(p => !returnedIndexes.has(p.lineIndex));
-  if (missingAnnotations.length > 0) {
-    console.warn(`⚠️ [ANNOTATE] Missing annotations for line indexes:`, missingAnnotations.map(l => l.lineIndex));
-    missingAnnotations.forEach(l => console.warn(`   Line ${l.lineIndex} (ts: ${l.timestamp}): "${l.line}"`));
-  }
-
-  // Zip start times back against the original words
-  const annotated = lines.map((line, i) => {
-    if (line.ghost) return line;
-    const match = result.find(r => r.lineIndex === i);
-    if (!match) return line;
-    const words = line.line.split(/\s+/).filter(Boolean);
-    if (match.starts.length !== words.length) {
-      console.warn(`⚠️ [ANNOTATE] Line ${i} word count mismatch: expected ${words.length}, got ${match.starts.length} starts — "${line.line}"`);
-    }
-    return {
-      ...line,
-      words: words.map((word, wi) => ({
-        word,
-        start: match.starts[wi] ?? null,
-      })) as SyncedWord[],
-    };
-  });
-
-  console.log("📋 [ANNOTATE] Final annotated lines summary:");
-  annotated.forEach((l, i) => {
-    if (!l.ghost) {
-      console.log(`   Line ${i} (ts: ${l.timestamp}) "${l.line}" → ${l.words?.length ?? 0} words annotated`);
-      if (l.words && l.words.length > 0) {
-        const first = l.words[0];
-        const last = l.words[l.words.length - 1];
-        console.log(`      first: "${first?.word}" @ ${first?.start}s  last: "${last?.word}" @ ${last?.start}s`);
-      }
-    }
-  });
-
-  return annotated;
-}
-
 async function translateLyrics(lines: SyncedLine[], language: TranslateLanguage): Promise<string[]> {
   const payload = lines.map((l, i) => ({ lineIndex: i, line: l.line }));
   const result = await geminiText(
@@ -281,7 +119,52 @@ async function translateLyrics(lines: SyncedLine[], language: TranslateLanguage)
 }
 
 // ---------------------------------------------------------------------------
-// WavyText
+// Helpers
+// ---------------------------------------------------------------------------
+
+function parseLyrics(raw: string): SyncedLine[] {
+  return raw.split("\n").map((l) => l.trim()).filter(Boolean).map((line) => ({
+    timestamp: null, line, ghost: /^\(.*\)$/.test(line), words: null, punches: [],
+  }));
+}
+
+function formatTime(s: number) {
+  const m = Math.floor(s / 60);
+  const ss = Math.floor(s % 60);
+  return `${m}:${String(ss).padStart(2, "0")}`;
+}
+
+function getActiveIndex(lines: SyncedLine[], time: number) {
+  let active = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i]!.timestamp !== null && lines[i]!.timestamp! <= time) active = i;
+  }
+  return active;
+}
+
+function letterOpacity(w: SyncedWord, t: number, li: number, lc: number, nextWordStart: number | null): number {
+  if (w.start === null) return 0;
+  const sweepEnd = nextWordStart ?? w.end ?? w.start + 0.35;
+  const fullDur = Math.max(sweepEnd - w.start, 0.05);
+  const letterStart = w.start + (li / Math.max(lc, 1)) * fullDur;
+  const letterDur = fullDur / Math.max(lc, 1);
+  const progress = (t - letterStart) / letterDur;
+  return Math.max(0, Math.min(1, progress));
+}
+
+function letterGlowPulse(w: SyncedWord, t: number, li: number, lc: number, nextWordStart: number | null): number {
+  if (w.start === null) return 0;
+  const sweepEnd = nextWordStart ?? w.end ?? w.start + 0.35;
+  const fullDur = Math.max(sweepEnd - w.start, 0.05);
+  const letterStart = w.start + (li / Math.max(lc, 1)) * fullDur;
+  const letterDur = fullDur / Math.max(lc, 1);
+  const progress = (t - letterStart) / letterDur;
+  const x = progress - 1;
+  return Math.exp(-(x * x) / (2 * 0.55 * 0.55));
+}
+
+// ---------------------------------------------------------------------------
+// Global CSS
 // ---------------------------------------------------------------------------
 
 const GLOBAL_CSS = `
@@ -303,6 +186,10 @@ const GLOBAL_CSS = `
 const LETTER_DUR = 0.08;
 const LETTER_GAP = 0;
 const LOOP_PAUSE = 0.3;
+
+// ---------------------------------------------------------------------------
+// WavyText
+// ---------------------------------------------------------------------------
 
 function WavyText({ text, color = "rgba(255,255,255,0.5)" }: { text: string; color?: string }) {
   const chars = text.split("");
@@ -392,7 +279,81 @@ function AnimatedWord({ word, currentTime, nextWordStart }: { word: SyncedWord; 
 }
 
 // ---------------------------------------------------------------------------
-// LanguageSelector — custom floating pill UI
+// StemSelector
+// ---------------------------------------------------------------------------
+
+function StemSelector({ stemMode, onSelect }: { stemMode: StemMode; onSelect: (mode: StemMode) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  return (
+    <div ref={ref} className="relative flex items-center">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-[22px] h-[22px] rounded-full border border-white/[0.12] flex items-center justify-center transition-all duration-150 hover:border-white/30 hover:bg-white/[0.06] cursor-pointer"
+        title={`Stem: ${STEM_LABELS[stemMode]}`}
+      >
+        <svg width="9" height="8" viewBox="0 0 11 10" fill="none">
+          <rect x="0" y="3" width="1.5" height="4" rx="0.75" fill="rgba(255,255,255,0.4)" />
+          <rect x="2.25" y="1" width="1.5" height="8" rx="0.75" fill="rgba(255,255,255,0.4)" />
+          <rect x="4.5" y="0" width="1.5" height="10" rx="0.75" fill="rgba(255,255,255,0.4)" />
+          <rect x="6.75" y="1" width="1.5" height="8" rx="0.75" fill="rgba(255,255,255,0.4)" />
+          <rect x="9" y="3" width="1.5" height="4" rx="0.75" fill="rgba(255,255,255,0.4)" />
+        </svg>
+      </button>
+
+      {open && (
+        <div
+          className="absolute top-full left-0 mt-[8px] rounded-[10px] overflow-hidden z-50"
+          style={{
+            background: "rgba(255,255,255,0.97)",
+            border: "1px solid rgba(0,0,0,0.07)",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.14), 0 0 0 1px rgba(0,0,0,0.04)",
+            minWidth: "130px",
+            animation: "lx-fade-in 0.15s ease-out forwards",
+          }}
+        >
+          {(Object.entries(STEM_LABELS) as [StemMode, string][]).map(([val, lbl], idx) => {
+            const isActive = val === stemMode;
+            return (
+              <button
+                key={val}
+                onClick={() => { onSelect(val); setOpen(false); }}
+                className="w-full text-left px-[13px] py-[8px] flex items-center justify-between gap-3 cursor-pointer transition-colors duration-100"
+                style={{
+                  background: isActive ? "rgba(0,0,0,0.04)" : "transparent",
+                  borderBottom: idx < Object.keys(STEM_LABELS).length - 1 ? "1px solid rgba(0,0,0,0.05)" : "none",
+                }}
+                onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "rgba(0,0,0,0.03)"; }}
+                onMouseLeave={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+              >
+                <span className="text-[12px] font-mono tracking-[0.05em]" style={{ color: isActive ? "rgba(0,0,0,0.8)" : "rgba(0,0,0,0.45)" }}>
+                  {lbl}
+                </span>
+                {isActive && (
+                  <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,0.4)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20,6 9,17 4,12" />
+                  </svg>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// LanguageSelector
 // ---------------------------------------------------------------------------
 
 function LanguageSelector({
@@ -409,7 +370,6 @@ function LanguageSelector({
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  // Close on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
@@ -418,79 +378,50 @@ function LanguageSelector({
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  const label = selectedLanguage ? LANGUAGE_LABELS[selectedLanguage] : "translate";
-
   return (
     <div ref={ref} className="relative flex items-center gap-2">
-      {/* Spinner dots when translating */}
       {translating && (
         <div className="flex gap-[3px] items-center">
           {[0, 1, 2].map((i) => (
             <span
               key={i}
-              className="w-[3px] h-[3px] rounded-full bg-white/30"
-              style={{ animation: "lxpulse 1.2s ease-in-out infinite", animationDelay: `${i * 0.2}s` }}
+              className="w-[3px] h-[3px] rounded-full"
+              style={{ background: "rgba(255,255,255,0.25)", animation: "lxpulse 1.2s ease-in-out infinite", animationDelay: `${i * 0.2}s` }}
             />
           ))}
         </div>
       )}
 
-      {/* Trigger pill */}
       <button
         onClick={() => { if (!translating) setOpen((o) => !o); }}
         disabled={translating}
-        className="flex items-center gap-[5px] px-[10px] py-[5px] rounded-full border transition-all duration-150 cursor-pointer"
-        style={{
-          background: selectedLanguage ? "rgba(255,255,255,0.08)" : "transparent",
-          borderColor: selectedLanguage ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.1)",
-          opacity: translating ? 0.4 : 1,
-        }}
+        className="bg-none border-none p-0 transition-opacity duration-150 cursor-pointer"
+        style={{ opacity: translating ? 0.4 : selectedLanguage ? 0.9 : 0.45 }}
       >
-        {/* Globe icon */}
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="10" />
-          <line x1="2" y1="12" x2="22" y2="12" />
-          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-        </svg>
-        <span
-          className="text-[11px] font-mono tracking-[0.07em]"
-          style={{ color: selectedLanguage ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.25)" }}
-        >
-          {label}
+        <span className="text-[11px] font-mono tracking-[0.08em] text-white">
+          {selectedLanguage ? LANGUAGE_LABELS[selectedLanguage] : "translate"}
         </span>
-        {/* Chevron */}
-        {!selectedLanguage && (
-          <svg
-            width="8" height="8" viewBox="0 0 24 24" fill="none"
-            stroke="rgba(255,255,255,0.2)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
-            style={{ transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.15s ease" }}
-          >
-            <polyline points="6,9 12,15 18,9" />
-          </svg>
-        )}
       </button>
 
-      {/* Clear button */}
       {selectedLanguage && !translating && (
         <button
           onClick={onClear}
-          className="w-[18px] h-[18px] rounded-full border border-white/[0.1] flex items-center justify-center cursor-pointer transition-all duration-150 hover:border-white/25 hover:bg-white/[0.06]"
+          className="w-[14px] h-[14px] flex items-center justify-center cursor-pointer opacity-30 hover:opacity-60 transition-opacity duration-150"
         >
-          <svg width="7" height="7" viewBox="0 0 10 10" fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="1.8" strokeLinecap="round">
+          <svg width="7" height="7" viewBox="0 0 10 10" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="1.8" strokeLinecap="round">
             <line x1="1" y1="1" x2="9" y2="9" />
             <line x1="9" y1="1" x2="1" y2="9" />
           </svg>
         </button>
       )}
 
-      {/* Dropdown */}
       {open && (
         <div
-          className="absolute bottom-full right-0 mb-[8px] rounded-[10px] overflow-hidden border border-white/[0.08]"
+          className="absolute bottom-full right-0 mb-[8px] rounded-[10px] overflow-hidden z-50"
           style={{
-            background: "rgba(18,18,20,0.96)",
-            backdropFilter: "blur(20px)",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04)",
+            background: "rgba(255,255,255,0.97)",
+            border: "1px solid rgba(0,0,0,0.07)",
+            boxShadow: "0 8px 32px rgba(0,0,0,0.14), 0 0 0 1px rgba(0,0,0,0.04)",
             minWidth: "130px",
             animation: "lx-fade-in 0.15s ease-out forwards",
           }}
@@ -503,20 +434,17 @@ function LanguageSelector({
                 onClick={() => { onSelect(val); setOpen(false); }}
                 className="w-full text-left px-[13px] py-[8px] flex items-center justify-between gap-3 cursor-pointer transition-colors duration-100"
                 style={{
-                  background: isActive ? "rgba(255,255,255,0.06)" : "transparent",
-                  borderBottom: idx < Object.keys(LANGUAGE_LABELS).length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none",
+                  background: isActive ? "rgba(0,0,0,0.04)" : "transparent",
+                  borderBottom: idx < Object.keys(LANGUAGE_LABELS).length - 1 ? "1px solid rgba(0,0,0,0.05)" : "none",
                 }}
-                onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.04)"; }}
+                onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "rgba(0,0,0,0.03)"; }}
                 onMouseLeave={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
               >
-                <span
-                  className="text-[12px] font-mono tracking-[0.05em]"
-                  style={{ color: isActive ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.45)" }}
-                >
+                <span className="text-[12px] font-mono tracking-[0.05em]" style={{ color: isActive ? "rgba(0,0,0,0.8)" : "rgba(0,0,0,0.45)" }}>
                   {lbl}
                 </span>
                 {isActive && (
-                  <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="rgba(0,0,0,0.4)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="20,6 9,17 4,12" />
                   </svg>
                 )}
@@ -542,7 +470,6 @@ export default function HomePage() {
   const backIconRef = useRef<HTMLSpanElement>(null);
   const fwdIconRef = useRef<HTMLSpanElement>(null);
 
-  // Scrubber refs — driven imperatively to avoid RAF/state race
   const progressBarRef = useRef<HTMLDivElement>(null);
   const thumbRef = useRef<HTMLDivElement>(null);
   const currentTimeDisplayRef = useRef<HTMLSpanElement>(null);
@@ -559,8 +486,7 @@ export default function HomePage() {
   const [savedLyrics, setSavedLyrics] = useState<SyncedLine[]>([]);
   const [lyricsSaved, setLyricsSaved] = useState(false);
 
-  // Phase / errors
-  const [phase, setPhase] = useState<Phase>("idle");
+  // Errors / meta
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [metaFetching, setMetaFetching] = useState(false);
 
@@ -569,23 +495,32 @@ export default function HomePage() {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
+  // Stems
+  const [stemMode, setStemMode] = useState<StemMode>("original");
+  const [vocalsURL, setVocalsURL] = useState<string | null>(null);
+  const [noVocalsURL, setNoVocalsURL] = useState<string | null>(null);
+  const stemsAvailable = !!(vocalsURL && noVocalsURL);
+
+  // Local sync
+  const [localSyncPhase, setLocalSyncPhase] = useState<LocalSyncPhase>("idle");
+  const [separateProgress, setSeparateProgress] = useState(0);
+
   // Translation
   const [selectedLanguage, setSelectedLanguage] = useState<TranslateLanguage | "">("");
   const [translatedLines, setTranslatedLines] = useState<string[] | null>(null);
   const [translating, setTranslating] = useState(false);
 
-  const isProcessing = phase === "uploading" || phase === "syncing" || phase === "annotating";
+  const isLocalSyncing = localSyncPhase === "starting" || localSyncPhase === "separating" || localSyncPhase === "transcribing";
   const activeLineIndex = lyricsSaved ? getActiveIndex(savedLyrics, currentTime) : -1;
 
-  const wavyLabel: string | null =
-    metaFetching ? "Searching for lyrics..." :
-    phase === "uploading" ? "Listening..." :
-    phase === "syncing" ? "Syncing lyrics..." :
-    phase === "annotating" ? "Annotating lyrics..." :
+  const syncLabel: string | null =
+    localSyncPhase === "starting" ? "Starting..." :
+    localSyncPhase === "separating" ? `Listening... ${separateProgress}%` :
+    localSyncPhase === "transcribing" ? "Syncing lyrics..." :
     null;
 
   // ---------------------------------------------------------------------------
-  // Reset everything
+  // Reset
   // ---------------------------------------------------------------------------
 
   const resetAll = useCallback(() => {
@@ -598,12 +533,16 @@ export default function HomePage() {
     setRawLyrics("");
     setSavedLyrics([]);
     setLyricsSaved(false);
-    setPhase("idle");
     setErrorMsg(null);
     setMetaFetching(false);
     setPlaying(false);
     setCurrentTime(0);
     setDuration(0);
+    setStemMode("original");
+    setVocalsURL(null);
+    setNoVocalsURL(null);
+    setLocalSyncPhase("idle");
+    setSeparateProgress(0);
     setSelectedLanguage("");
     setTranslatedLines(null);
     setTranslating(false);
@@ -723,6 +662,106 @@ export default function HomePage() {
   }, [togglePlay, seek]);
 
   // ---------------------------------------------------------------------------
+  // Stem switching
+  // ---------------------------------------------------------------------------
+
+  const switchStem = useCallback((mode: StemMode) => {
+    const a = audioRef.current;
+    if (!a) return;
+    const wasPlaying = !a.paused;
+    const time = a.currentTime;
+    setStemMode(mode);
+    const newSrc =
+      mode === "vocals" ? vocalsURL ?? audioURL
+      : mode === "instrumental" ? noVocalsURL ?? audioURL
+      : audioURL;
+    if (!newSrc) return;
+    a.src = newSrc;
+    a.load();
+    a.currentTime = time;
+    if (wasPlaying) void a.play();
+  }, [audioURL, vocalsURL, noVocalsURL]);
+
+  // ---------------------------------------------------------------------------
+  // Process (sync lyrics + stems)
+  // ---------------------------------------------------------------------------
+
+  const handleProcess = useCallback(async () => {
+    if (!audioFile || !rawLyrics.trim()) return;
+
+    // Optimistically set to separating so WavyText shows "Listening..." immediately
+    setLocalSyncPhase("separating");
+    setSeparateProgress(0);
+    setErrorMsg(null);
+
+    const formData = new FormData();
+    formData.append("file", audioFile);
+    formData.append("lyrics", rawLyrics);
+
+    try {
+      const res = await fetch("http://localhost:8000/process", { method: "POST", body: formData });
+      if (!res.ok || !res.body) throw new Error(`Server error ${res.status}`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trim();
+          if (!raw) continue;
+
+          const event = JSON.parse(raw) as {
+            phase: string;
+            progress?: number;
+            vocals_url?: string;
+            no_vocals_url?: string;
+            synced_lines?: SyncedLine[];
+            message?: string;
+          };
+
+          if (event.phase === "separating" && event.progress !== undefined) {
+            setLocalSyncPhase("separating");
+            setSeparateProgress(event.progress);
+          } else if (event.phase === "aligning") {
+            // Stems are ready — unlock stem selector
+            setLocalSyncPhase("transcribing");
+            if (event.vocals_url && event.no_vocals_url) {
+              setVocalsURL(`http://localhost:8000${event.vocals_url}`);
+              setNoVocalsURL(`http://localhost:8000${event.no_vocals_url}`);
+            }
+          } else if (event.phase === "done") {
+            if (event.vocals_url && event.no_vocals_url) {
+              setVocalsURL(`http://localhost:8000${event.vocals_url}`);
+              setNoVocalsURL(`http://localhost:8000${event.no_vocals_url}`);
+              setStemMode("original");
+            }
+            if (event.synced_lines) {
+              setSavedLyrics(event.synced_lines);
+              lineRefs.current = new Array(event.synced_lines.length).fill(null);
+              setLyricsSaved(true);
+            }
+            setLocalSyncPhase("done");
+          } else if (event.phase === "error") {
+            throw new Error(event.message ?? "Processing failed");
+          }
+        }
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Sync failed");
+      setLocalSyncPhase("error");
+    }
+  }, [audioFile, rawLyrics]);
+
+  // ---------------------------------------------------------------------------
   // Translation
   // ---------------------------------------------------------------------------
 
@@ -754,6 +793,11 @@ export default function HomePage() {
     setTrackTitle(fallbackTitle);
     setTrackArtist("");
     setCurrentTime(0);
+    setStemMode("original");
+    setVocalsURL(null);
+    setNoVocalsURL(null);
+    setLocalSyncPhase("idle");
+    setSeparateProgress(0);
 
     setMetaFetching(true);
     try {
@@ -792,59 +836,6 @@ export default function HomePage() {
     if (thumbRef.current) thumbRef.current.style.left = pctStr;
     if (currentTimeDisplayRef.current) currentTimeDisplayRef.current.textContent = formatTime(a.currentTime);
     setCurrentTime(a.currentTime);
-  };
-
-  // ---------------------------------------------------------------------------
-  // Lyric sync
-  // ---------------------------------------------------------------------------
-
-  const handleSave = async () => {
-    if (!audioFile || !rawLyrics.trim()) return;
-    const parsed = parseLyrics(rawLyrics);
-    setErrorMsg(null);
-
-    console.log("🚀 [START] Starting lyric sync pipeline");
-    console.log(`   Audio file: ${audioFile.name} (${(audioFile.size / 1024 / 1024).toFixed(2)} MB, type: ${audioFile.type})`);
-    console.log(`   Total parsed lines: ${parsed.length}`);
-    console.table(parsed.map((l, i) => ({ index: i, ghost: l.ghost, line: l.line })));
-
-    try {
-      setPhase("uploading");
-      const audiob64 = await fileToBase64(audioFile);
-      console.log(`📦 [UPLOAD] Audio encoded to base64, length: ${audiob64.length} chars`);
-
-      const mime = audioFile.type || "audio/mpeg";
-      console.log(`   MIME type: ${mime}`);
-
-      setPhase("syncing");
-      const synced = await syncLines(audiob64, mime, parsed);
-
-      setPhase("annotating");
-      const annotated = await annotateWords(audiob64, mime, synced);
-
-      console.log("🎉 [DONE] Pipeline complete. Final annotated lyrics:");
-      console.log(JSON.stringify(annotated, null, 2));
-
-      setSavedLyrics(annotated);
-      lineRefs.current = new Array(annotated.length).fill(null);
-      if (selectedLanguage) {
-        setTranslating(true);
-        try {
-          const translated = await translateLyrics(annotated, selectedLanguage);
-          setTranslatedLines(translated);
-        } catch {
-          setTranslatedLines(null);
-        } finally {
-          setTranslating(false);
-        }
-      }
-      setLyricsSaved(true);
-      setPhase("done");
-    } catch (err) {
-      console.error("❌ [ERROR] Sync pipeline failed:", err);
-      setErrorMsg(err instanceof Error ? err.message : "Something went wrong");
-      setPhase("error");
-    }
   };
 
   // ---------------------------------------------------------------------------
@@ -982,7 +973,7 @@ export default function HomePage() {
             </div>
           )}
 
-          {/* Track info + change song button */}
+          {/* Track info + stem selector + change song */}
           <div className="flex items-start justify-between gap-2">
             <div className="flex flex-col gap-[3px] min-w-0">
               {metaFetching && !trackTitle ? (
@@ -1001,18 +992,23 @@ export default function HomePage() {
               )}
             </div>
 
-            {audioFile && (
-              <button
-                onClick={() => { resetAll(); setTimeout(() => audioInputRef.current?.click(), 50); }}
-                className="shrink-0 w-[22px] h-[22px] rounded-full border border-white/[0.12] flex items-center justify-center transition-all duration-150 hover:border-white/30 hover:bg-white/[0.06] mt-[1px] cursor-pointer"
-                title="Change song"
-              >
-                <svg width="9" height="9" viewBox="0 0 9 9" fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="1.5" strokeLinecap="round">
-                  <line x1="4.5" y1="1" x2="4.5" y2="8" />
-                  <line x1="1" y1="4.5" x2="8" y2="4.5" />
-                </svg>
-              </button>
-            )}
+            <div className="flex items-center gap-[8px] mt-[1px] shrink-0">
+              {stemsAvailable && (
+                <StemSelector stemMode={stemMode} onSelect={switchStem} />
+              )}
+              {audioFile && (
+                <button
+                  onClick={() => { resetAll(); setTimeout(() => audioInputRef.current?.click(), 50); }}
+                  className="w-[22px] h-[22px] rounded-full border border-white/[0.12] flex items-center justify-center transition-all duration-150 hover:border-white/30 hover:bg-white/[0.06] cursor-pointer"
+                  title="Change song"
+                >
+                  <svg width="9" height="9" viewBox="0 0 9 9" fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="1.5" strokeLinecap="round">
+                    <line x1="4.5" y1="1" x2="4.5" y2="8" />
+                    <line x1="1" y1="4.5" x2="8" y2="4.5" />
+                  </svg>
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Seek bar */}
@@ -1043,21 +1039,12 @@ export default function HomePage() {
 
           {/* Playback controls */}
           <div className="flex items-center justify-center gap-6">
-            {/* Back 5s — RotateCcw from lucide */}
-            <button
-              onClick={() => seek(-5, -30, backIconRef)}
-              className="bg-none border-none cursor-pointer p-1 flex items-center justify-center"
-            >
+            <button onClick={() => seek(-5, -30, backIconRef)} className="bg-none border-none cursor-pointer p-1 flex items-center justify-center">
               <span ref={backIconRef} className="inline-flex">
-                <RotateCcw
-                  size={18}
-                  strokeWidth={1.5}
-                  color={audioFile ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.12)"}
-                />
+                <RotateCcw size={18} strokeWidth={1.5} color={audioFile ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.12)"} />
               </span>
             </button>
 
-            {/* Play / Pause */}
             <button
               onClick={togglePlay}
               className="w-[46px] h-[46px] rounded-full flex items-center justify-center shrink-0 transition-all duration-[250ms] active:scale-[0.93] cursor-pointer"
@@ -1082,24 +1069,16 @@ export default function HomePage() {
               )}
             </button>
 
-            {/* Forward 5s — RotateCw from lucide */}
-            <button
-              onClick={() => seek(5, 30, fwdIconRef)}
-              className="bg-none border-none cursor-pointer p-1 flex items-center justify-center"
-            >
+            <button onClick={() => seek(5, 30, fwdIconRef)} className="bg-none border-none cursor-pointer p-1 flex items-center justify-center">
               <span ref={fwdIconRef} className="inline-flex">
-                <RotateCw
-                  size={18}
-                  strokeWidth={1.5}
-                  color={audioFile ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.12)"}
-                />
+                <RotateCw size={18} strokeWidth={1.5} color={audioFile ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.12)"} />
               </span>
             </button>
           </div>
 
           <div className="flex-1" />
           {errorMsg && <p className="m-0 text-[#e05555] text-[10px] font-mono">{errorMsg.slice(0, 90)}</p>}
-          {!audioFile && rawLyrics.trim() && !errorMsg && !isProcessing && (
+          {!audioFile && rawLyrics.trim() && !errorMsg && (
             <p className="m-0 text-white/15 text-[10px] font-mono">add a song first</p>
           )}
         </div>
@@ -1118,6 +1097,7 @@ export default function HomePage() {
 
               {/* Bottom toolbar */}
               <div className="flex items-center justify-between pt-5 border-t border-white/[0.06] shrink-0">
+                {/* Left: get lyrics */}
                 <a
                   href={googleLyricsURL()}
                   target="_blank"
@@ -1134,21 +1114,22 @@ export default function HomePage() {
                   <span className="text-[11px] font-mono tracking-[0.08em] text-white/90">get lyrics</span>
                 </a>
 
+                {/* Right: sync lyrics */}
                 <button
-                  onClick={() => void handleSave()}
-                  disabled={!!(!(rawLyrics.trim().length > 0 && !!audioFile && !isProcessing && !metaFetching))}
+                  onClick={() => void handleProcess()}
+                  disabled={!rawLyrics.trim() || !audioFile || isLocalSyncing || metaFetching}
                   className="bg-none border-none p-0 transition-colors duration-200"
-                  style={{ cursor: rawLyrics.trim() && audioFile && !isProcessing && !metaFetching ? "pointer" : "default" }}
+                  style={{ cursor: rawLyrics.trim() && audioFile && !isLocalSyncing && !metaFetching ? "pointer" : "default" }}
                 >
-                  {wavyLabel ? (
-                    <WavyText text={wavyLabel} />
+                  {syncLabel ? (
+                    <WavyText text={syncLabel} />
                   ) : (
                     <span
                       className="text-[13px] font-mono tracking-[0.08em]"
                       style={{ color: rawLyrics.trim() && audioFile ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.15)" }}
                     >
-                      {phase === "done" ? "re-sync" : phase === "error" ? "retry" : "save lyrics"}
-                      {rawLyrics.trim() && audioFile && phase !== "done" && " →"}
+                      {localSyncPhase === "done" ? "re-sync" : localSyncPhase === "error" ? "retry" : "sync lyrics"}
+                      {rawLyrics.trim() && audioFile && localSyncPhase !== "done" && " →"}
                     </span>
                   )}
                 </button>
@@ -1164,7 +1145,7 @@ export default function HomePage() {
                 <div className="h-[30vh]" />
               </div>
 
-              {/* Language selector */}
+              {/* Translate — bottom right, minimal */}
               <div className="absolute bottom-7 right-8 z-30">
                 <LanguageSelector
                   selectedLanguage={selectedLanguage}
