@@ -142,9 +142,9 @@ function getActiveIndex(lines: SyncedLine[], time: number) {
   return active;
 }
 
-function letterOpacity(w: SyncedWord, t: number, li: number, lc: number, nextWordStart: number | null): number {
+function letterOpacity(w: SyncedWord, t: number, li: number, lc: number): number {
   if (w.start === null) return 0;
-  const sweepEnd = nextWordStart ?? w.end ?? w.start + 0.35;
+  const sweepEnd = w.end ?? w.start + 0.35;
   const fullDur = Math.max(sweepEnd - w.start, 0.05);
   const letterStart = w.start + (li / Math.max(lc, 1)) * fullDur;
   const letterDur = fullDur / Math.max(lc, 1);
@@ -152,9 +152,9 @@ function letterOpacity(w: SyncedWord, t: number, li: number, lc: number, nextWor
   return Math.max(0, Math.min(1, progress));
 }
 
-function letterGlowPulse(w: SyncedWord, t: number, li: number, lc: number, nextWordStart: number | null): number {
+function letterGlowPulse(w: SyncedWord, t: number, li: number, lc: number): number {
   if (w.start === null) return 0;
-  const sweepEnd = nextWordStart ?? w.end ?? w.start + 0.35;
+  const sweepEnd = w.end ?? w.start + 0.35;
   const fullDur = Math.max(sweepEnd - w.start, 0.05);
   const letterStart = w.start + (li / Math.max(lc, 1)) * fullDur;
   const letterDur = fullDur / Math.max(lc, 1);
@@ -228,18 +228,18 @@ function WavyText({ text, color = "rgba(255,255,255,0.5)" }: { text: string; col
 // AnimatedWord
 // ---------------------------------------------------------------------------
 
-function AnimatedWord({ word, currentTime, nextWordStart }: { word: SyncedWord; currentTime: number; nextWordStart: number | null }) {
+function AnimatedWord({ word, currentTime }: { word: SyncedWord; currentTime: number }) {
   const letters = word.word.split("");
   const lc = letters.length;
 
   const pulses = letters.map((_, li) =>
-    word.start !== null ? letterGlowPulse(word, currentTime, li, lc, nextWordStart) : 0
+    word.start !== null ? letterGlowPulse(word, currentTime, li, lc) : 0
   );
 
   return (
     <span className="inline-block mr-[0.25em]">
       {letters.map((letter, li) => {
-        const opacity = word.start !== null ? letterOpacity(word, currentTime, li, lc, nextWordStart) : 0;
+        const opacity = word.start !== null ? letterOpacity(word, currentTime, li, lc) : 0;
         const v = Math.round(160 + (255 - 160) * opacity);
 
         let ripple = 0;
@@ -876,7 +876,7 @@ export default function HomePage() {
             {isActive && line.words && line.words.length > 0 ? (
               <span style={{ fontSize: isActive ? "28px" : "24px", fontWeight: isActive ? 700 : 600 }}>
                 {line.words.map((word, wi) => (
-                  <AnimatedWord key={wi} word={word} currentTime={currentTime} nextWordStart={line.words?.[wi + 1]?.start ?? null} />
+                  <AnimatedWord key={wi} word={word} currentTime={currentTime} />
                 ))}
               </span>
             ) : line.line}
